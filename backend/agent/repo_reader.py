@@ -5,7 +5,7 @@ Reads GitHub repositories using the authenticated user's
 GitHub OAuth access token.
 """
 
-from github import Github
+from github import Github, Auth
 from github.GithubException import GithubException
 
 
@@ -26,7 +26,9 @@ class RepoReader:
         if not access_token:
             raise ValueError("GitHub access token is required.")
 
-        self.gh = Github(access_token)
+        # Recommended authentication method for PyGithub 2.x
+        auth = Auth.Token(access_token)
+        self.gh = Github(auth=auth)
 
     def _extract_repo_name(self, repo_url: str) -> str:
         """
@@ -43,16 +45,37 @@ class RepoReader:
 
         return repo_url.replace(prefix, "").rstrip("/")
 
-    def get_file_tree(self, repo_url: str) -> dict:
+    def repository_exists(self, repo_url: str) -> bool:
         """
-        Fetch all files from a GitHub repository.
+        Check whether a repository exists.
+
+        Args:
+            repo_url (str): GitHub repository URL.
 
         Returns:
-        {
-            "files": [...],
-            "truncated": False,
-            "warning": None
-        }
+            bool
+        """
+        repo_name = self._extract_repo_name(repo_url)
+
+        try:
+            self.gh.get_repo(repo_name)
+            return True
+
+        except GithubException:
+            return False
+
+    def get_file_tree(self, repo_url: str) -> dict:
+        """
+        Fetch the repository file tree.
+
+        Returns:
+            {
+                "files": [...],
+                "truncated": bool,
+                "warning": str | None,
+                "total_files": int,
+                "returned_files": int
+            }
         """
 
         repo_name = self._extract_repo_name(repo_url)
@@ -62,7 +85,7 @@ class RepoReader:
 
             tree = repo.get_git_tree(
                 sha="HEAD",
-                recursive=True
+                recursive=True,
             )
 
             files = [
@@ -75,12 +98,14 @@ class RepoReader:
 
             if tree.truncated:
                 warning = (
-                    "GitHub truncated the repository tree. "
-                    "Only part of the repository was analyzed."
+                    "GitHub truncated the repository tree because "
+                    "it exceeded GitHub's response size limit. "
+                    "Only the first part of the repository "
+                    "was analyzed."
                 )
 
             return {
-                "files": files[:self.MAX_FILES],
+                "files": files[: self.MAX_FILES],
                 "truncated": tree.truncated,
                 "warning": warning,
                 "total_files": len(files),
@@ -88,15 +113,15 @@ class RepoReader:
             }
 
         except GithubException as e:
-            raise Exception(f"GitHub API Error: {e.data}")
+            raise Exception(f"GitHub API Error: {e.data}") from e
 
     def get_file_content(self, repo_url: str, path: str) -> str:
         """
         Read the content of a file from a GitHub repository.
 
         Args:
-            repo_url (str)
-            path (str)
+            repo_url (str): GitHub repository URL.
+            path (str): File path inside the repository.
 
         Returns:
             str
@@ -111,22 +136,10 @@ class RepoReader:
 
             return file.decoded_content.decode(
                 "utf-8",
-                errors="replace"
+                errors="replace",
             )
 
         except GithubException as e:
-            raise Exception(f"Unable to read file '{path}': {e.data}")
-
-    def repository_exists(self, repo_url: str) -> bool:
-        """
-        Check whether a repository exists.
-        """
-
-        repo_name = self._extract_repo_name(repo_url)
-
-        try:
-            self.gh.get_repo(repo_name)
-            return True
-
-        except GithubException:
-            return False
+            raise Exception(
+                f"Unable to read file '{path}': {e.data}"
+            ) from e
